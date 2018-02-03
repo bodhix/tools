@@ -16,6 +16,9 @@
 
 #define EVENT_SIZE (sizeof(struct inotify_event))
 #define BUFFER_SIZE ((EVENT_SIZE + 16) * 16)
+#define EVENT_TYPE_SIZE 10
+#define EVENT_NAME_SIZE 20
+
 #define EXIT_FLAG "exit_flag"
 
 static int exit_flag = 0;
@@ -56,6 +59,37 @@ static int exit_flag = 0;
    IN_ONLYDIR        Only watch pathname if it is a directory. (since Linux 2.6.15)
  */
 
+struct event_map_s
+{
+    int  mask;
+    char name[EVENT_NAME_SIZE];
+};
+
+struct event_map_s event_map[] =
+{
+    {IN_ACCESS, "IN_ACCESS"},
+    {IN_MODIFY, "IN_MODIFY"},
+    {IN_ATTRIB, "IN_ATTRIB"},
+    {IN_CLOSE_WRITE, "IN_CLOSE_WRITE"},
+    {IN_CLOSE_NOWRITE, "IN_CLOSE_NOWRITE"},
+    {IN_CLOSE, "IN_CLOSE"},
+    {IN_OPEN, "IN_OPEN"},
+    {IN_MOVED_FROM, "IN_MOVED_FROM"},
+    {IN_MOVED_TO, "IN_MOVED_TO"},
+    {IN_MOVE, "IN_MOVE"},
+    {IN_CREATE, "IN_CREATE"},
+    {IN_DELETE, "IN_DELETE"},
+    {IN_DELETE_SELF, "IN_DELETE_SELF"},
+    {IN_MOVE_SELF, "IN_MOVE_SELF"},
+    {IN_DONT_FOLLOW, "IN_DONT_FOLLOW"},
+    {IN_EXCL_UNLINK, "IN_EXCL_UNLINK"},
+    {IN_ONESHOT, "IN_ONESHOT"},
+    {IN_MASK_ADD, "IN_MASK_ADD"},
+    {IN_ONLYDIR, "IN_ONLYDIR"},
+    //{IN_ALL_EVENTS, "IN_ALL_EVENTS"},
+    {0, NULL}
+};
+
 struct inotify_mask_s
 {
     int access;
@@ -88,14 +122,57 @@ struct option long_options[] =
     {NULL, 0, NULL, 0}
 };
 
-struct inotify_opt {
+typedef struct inotify_event inotify_event_t;
+
+typedef struct {
     int mask;
     char *path;
-};
+} inotify_opt_t;
+
+typedef struct {
+    char type[EVENT_TYPE_SIZE];
+    char name[EVENT_NAME_SIZE];
+} event_name_t;
 
 static const char *optstring = "p:cdm";
 
-static int log_inotify_event(struct inotify_event *ev)
+static event_name_t* event_name(inotify_event_t *ev)
+{
+    assert(ev);
+
+    static event_name_t event_name;
+
+    int mask = ev->mask;
+
+    // get the type, directory or file
+    if (mask & IN_ISDIR)
+    {
+        strcpy(event_name.type, "directory");
+    }
+    else
+    {
+        strcpy(event_name.type, "file");
+    }
+
+    // get the event name
+    struct event_map_s *map = event_map;
+    while (map->mask)
+    {
+        if (mask & map->mask)
+        {
+            strcpy(event_name.name, map->name);
+            return &event_name;
+        }
+        map += 1;
+    }
+    
+    // No match in event_map
+    strcpy(event_name.name, "UNKNOWN");
+
+    return &event_name;
+}
+
+static int log_inotify_event(inotify_event_t *ev)
 {
     if (ev == NULL)
     {
@@ -116,46 +193,11 @@ static int log_inotify_event(struct inotify_event *ev)
         exit_flag = 1;
     }
 
-    if (mask & IN_CREATE)
-    {
-        if (mask & IN_ISDIR)
-        {
-            linfo("Directory %s is created", ev->name);
-        }
-        else
-        {
-            linfo("File %s is created", ev->name);
-        }
-    }
-    else if (mask & IN_DELETE)
-    {
-        if (mask & IN_ISDIR)
-        {
-            linfo("Directory %s is deleted", ev->name);
-        }
-        else
-        {
-            linfo("File %s is deleted", ev->name);
-        }
-    }
-    else if (mask & IN_MODIFY)
-    {
-        if (mask & IN_ISDIR)
-        {
-            linfo("Directory %s is modified", ev->name);
-        }
-        else
-        {
-            linfo("File %s is modified", ev->name);
-        }
-    }
-    else
-    {
-        lerror("Unknown mask %x for %s", mask, ev->name);
-    }
+    event_name_t *ev_name = event_name(ev);
+    linfo("Detect %s event from %s %s", ev_name->name, ev_name->type, ev->name);
 }
 
-static void init_options(struct inotify_opt *opt)
+static void init_options(inotify_opt_t *opt)
 {
     assert(opt);
 
@@ -163,7 +205,7 @@ static void init_options(struct inotify_opt *opt)
     opt->path = NULL;
 }
 
-static void parse_options(int argc, char *argv[], struct inotify_opt *opt)
+static void parse_options(int argc, char *argv[], inotify_opt_t *opt)
 {
     assert(argc);
     assert(argv);
@@ -202,7 +244,7 @@ static void parse_options(int argc, char *argv[], struct inotify_opt *opt)
     linfo("parse_options finish");
 }
 
-static void check_options(struct inotify_opt *opt)
+static void check_options(inotify_opt_t *opt)
 {
     assert(opt);
 
@@ -222,7 +264,7 @@ static void check_options(struct inotify_opt *opt)
 
 int main(int argc, char *argv[])
 {
-    struct inotify_opt *opt;
+    inotify_opt_t *opt;
     init_options(opt);
     parse_options(argc, argv, opt);
     check_options(opt);
@@ -255,7 +297,7 @@ int main(int argc, char *argv[])
 
         while (shift < len)
         {
-            struct inotify_event *ev = (struct inotify_event *)(buffer + shift);
+            inotify_event_t *ev = (inotify_event_t *)(buffer + shift);
             log_inotify_event(ev);
 
             shift += EVENT_SIZE + ev->len;
