@@ -19,11 +19,14 @@
 #define SOCK_DGRAM_L  0
 #define SOCK_STREAM_L 1
 
+#define DELAY 0
+
 struct args
 {
     unsigned short mode; // server--1 or client--0
     unsigned short port;
     unsigned short sock; // stream--1 or graph--0
+    unsigned int   delay;
     char *ip;
 };
 
@@ -33,6 +36,7 @@ static struct args args_s = {
     .mode = MODE_SERVER,
     .port = 8888,
     .sock = SOCK_STREAM_L,
+    .delay = DELAY,
     .ip   = NULL,
 };
 
@@ -40,7 +44,7 @@ static void parse_args(int argc, char *argv[])
 {
     int opt;
     char *ip = NULL;
-    while ((opt = getopt(argc, argv, "cstup:a:")) != -1)
+    while ((opt = getopt(argc, argv, "cstup:a:d:")) != -1)
     {
         switch (opt){
         case 'c':
@@ -53,7 +57,7 @@ static void parse_args(int argc, char *argv[])
             args_s.sock = SOCK_STREAM_L;
             break;
         case 'u':
-            args_s.mode = SOCK_DGRAM_L;
+            args_s.sock = SOCK_DGRAM_L;
             break;
         case 'p':
             args_s.port = atoi(optarg);
@@ -64,6 +68,9 @@ static void parse_args(int argc, char *argv[])
                 lerror_exit("malloc");
             strncpy(ip, optarg, IP_SIZE);
             args_s.ip = ip;
+            break;
+        case 'd':
+            args_s.delay = atoi(optarg);
             break;
         default:
             lerror_exit("unknown opt %c, %d", opt, opt);
@@ -114,6 +121,14 @@ static void create_stream_client()
     strncpy(buff, "from create_stream_client", BUFF_SIZE);
     linfo("send: %s", buff);
     send(sock, buff, BUFF_SIZE, 0);
+
+    if (args_s.delay > 0)
+    {
+        sleep(args_s.delay);
+    }
+
+    linfo("begin to close %d", sock);
+    close(sock);
 }
 
 static void create_dgram_client()
@@ -167,6 +182,9 @@ static void create_stream_server()
         memset(buff, 0, BUFF_SIZE);
     }
     linfo("client close");
+
+    close(sock_accept);
+    close(sock);
 }
 
 static void create_dgram_server()
@@ -205,11 +223,21 @@ static void create_socket()
     }
 }
 
+static void clean_up()
+{
+    if (args_s.ip != default_ip)
+    {
+        free(args_s.ip);
+    }
+}
 
 int main(int argc, char *argv[])
 {
     parse_args(argc, argv);
 
     create_socket();
+
+    clean_up();
+
     return 0;
 }
