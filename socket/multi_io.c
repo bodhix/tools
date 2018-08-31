@@ -8,6 +8,7 @@
 #include <string.h> // strncpy
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "clog.h"
 
@@ -34,7 +35,7 @@ struct args
 const static char *default_ip = "127.0.0.1";
 
 static struct args args_s = {
-    .mode = MODE_SERVER,
+    .mode = MODE_EPOLL,
     .port = 8888,
     .sock = SOCK_STREAM_L,
     .ip   = NULL,
@@ -109,6 +110,7 @@ static int set_noblock(int fd)
 
     flags = flags | O_NONBLOCK;
     ret = fcntl(fd, F_SETFL, flags);
+    if (ret == -1)
         lerror_exit("fcntl %s", strerror(errno));
 
     return 0;
@@ -119,6 +121,7 @@ static void create_stream_server()
     int ret = 0;
     int nfd = 0;
     int i = 0;
+    int recv_fd = 0;
     int listen_sock, epoll_fd, accept_sock;
     listen_sock = stream_socket();
 
@@ -158,7 +161,8 @@ static void create_stream_server()
             {
                 socklen_t len = sizeof(client);
                 accept_sock = accept(listen_sock, (struct sockaddr*)&client, &len);
-                linfo("client: %s %d", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+                set_noblock(accept_sock);
+                linfo("accept client: %s %d", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
 
                 char buff[BUFF_SIZE] = {0};
                 strncpy(buff, "from server", BUFF_SIZE);
@@ -167,6 +171,7 @@ static void create_stream_server()
 
                 ev.events = EPOLLIN | EPOLLET;
                 ev.data.fd = accept_sock;
+                linfo("epoll_ctl add %d to eventpoll", accept_sock);
                 ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, accept_sock, &ev);
                 if (ret == -1)
                     lerror("epoll_ctl %s", strerror(errno));
@@ -174,30 +179,37 @@ static void create_stream_server()
             // read
             else if (events[i].events & EPOLLIN)
             {
-                while ((ret = recv(events[i].data.fd, buff, BUFF_SIZE, 0)) != 0)
+                recv_fd = events[i].data.fd;
+                while ((ret = recv(recv_fd, buff, BUFF_SIZE, 0)) > 0)
                 {
-                    if (ret == -1)
+                    linfo("recv from %d: msg [ %s ]", recv_fd, buff);
+                }
+                if (ret == -1)
+                {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
                     {
-                        if (errno == EAGAIN)
-                            break;
-                        lerror("recv %d %s", events[i].data.fd, strerror(error));
-                        break;
+                        linfo("recv from %d: %d, try again", recv_fd, errno);
                     }
-                    if (ret == 0)
+                    else
                     {
-                        linfo("close %d", events[i].data.fd);
-                        ev.data.fd = events[i].data.fd;
+                        lerror("recv from %d: %s, delete it from eventpoll", recv_fd, strerror(errno));
+                        ev.data.fd = recv_fd;
                         ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd, &ev);
                         if (ret == -1)
                             lerror("epoll_ctl EPOLL_CTL_DEL %s", strerror(errno));
                         
-                        close(events[i].data.fd);
-                        break;
+                        close(recv_fd);
                     }
-                    else
-                    {
-                        linfo("recv %d %s", events[i].data.fd, buff);
-                    }
+                }
+                if (ret == 0)
+                {
+                    linfo("client of %d closed, delete from eventpoll", recv_fd);
+                    ev.data.fd = recv_fd;
+                    ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, events[i].data.fd, &ev);
+                    if (ret == -1)
+                        lerror("epoll_ctl EPOLL_CTL_DEL %s", strerror(errno));
+                    
+                    close(recv_fd);
                 }
             }
         }
